@@ -1,4 +1,7 @@
-FROM maven:3.9.16-eclipse-temurin-25 AS build
+# Build stage pinned to the builder's native arch: the jar is arch-independent,
+# so Maven never runs under QEMU emulation. Only the small runtime stage is
+# built per target platform.
+FROM --platform=$BUILDPLATFORM maven:3.9.16-eclipse-temurin-25 AS build
 WORKDIR /build
 COPY pom.xml .
 RUN mvn -B dependency:go-offline

@@ -1,107 +1,17 @@
 name: delivery
 
+# The pipeline itself lives in itayna/platform-workflows and is shared by
+# every service on the platform's paved road. Mandatory steps (scans, SBOM,
+# signing) are added there and arrive here by tag, so this file stays three
+# lines of configuration instead of a copy that drifts.
 on:
   push:
     branches: [main]
 
-env:
-  IMAGE: ghcr.io/${{ github.repository_owner }}/java-sample-app
-
-permissions:
-  contents: read
-  packages: write
-  id-token: write
-
 jobs:
-  build-test:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-java@v5
-        with:
-          distribution: temurin
-          java-version: "25"
-          cache: maven
-      - run: mvn -B verify
-
-  scan-source:
-    needs: build-test
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - name: Trivy filesystem scan (fail on critical)
-        uses: aquasecurity/trivy-action@v0.36.0
-        with:
-          scan-type: fs
-          severity: CRITICAL
-          exit-code: "1"
-
-  build-push-sign:
-    needs: scan-source
-    runs-on: ubuntu-latest
-    outputs:
-      tag: ${{ steps.meta.outputs.tag }}
-    steps:
-      - uses: actions/checkout@v4
-      - id: meta
-        run: echo "tag=${GITHUB_SHA::12}" >> "$GITHUB_OUTPUT"
-
-      - uses: docker/login-action@v3
-        with:
-          registry: ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
-
-      - uses: docker/setup-qemu-action@v3
-      - uses: docker/setup-buildx-action@v3
-
-      - name: Build and push
-        uses: docker/build-push-action@v6
-        with:
-          context: .
-          push: true
-          platforms: linux/amd64,linux/arm64
-          tags: ${{ env.IMAGE }}:${{ steps.meta.outputs.tag }}
-
-      - name: Trivy image scan (fail on critical)
-        uses: aquasecurity/trivy-action@v0.36.0
-        with:
-          image-ref: ${{ env.IMAGE }}:${{ steps.meta.outputs.tag }}
-          severity: CRITICAL
-          exit-code: "1"
-
-      - name: Generate SBOM (SPDX)
-        uses: anchore/sbom-action@v0.17.7
-        with:
-          image: ${{ env.IMAGE }}:${{ steps.meta.outputs.tag }}
-          format: spdx-json
-          output-file: sbom.spdx.json
-
-      - name: Attach SBOM to image
-        uses: anchore/sbom-action/publish-sbom@v0.17.7
-        with:
-          sbom-artifact-match: sbom.spdx.json
-
-      - name: Install cosign
-        uses: sigstore/cosign-installer@v3
-
-      - name: Sign image (keyless)
-        run: cosign sign --yes ${{ env.IMAGE }}:${{ steps.meta.outputs.tag }}
-
-  promote-dev:
-    needs: build-push-sign
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          repository: itayna/terasky-platform-ha
-          ssh-key: ${{ secrets.PLATFORM_REPO_DEPLOY_KEY }}
-
-      - name: Update dev image tag
-        run: |
-          TAG="${{ needs.build-push-sign.outputs.tag }}"
-          sed -i "s|newTag: .*|newTag: ${TAG}|" environments/dev/kustomization.yaml
-          git config user.name "delivery-bot"
-          git config user.email "delivery-bot@users.noreply.github.com"
-          git commit -am "deploy java-sample-app:${TAG} to dev"
-          git push
+  delivery:
+    uses: itayna/platform-workflows/.github/workflows/java-service-delivery.yml@v1
+    with:
+      service-name: java-sample-app
+    secrets:
+      PLATFORM_REPO_DEPLOY_KEY: ${{ secrets.PLATFORM_REPO_DEPLOY_KEY }}
